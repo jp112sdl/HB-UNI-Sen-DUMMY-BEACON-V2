@@ -4,17 +4,19 @@
 // 2018-08-30 jp112sdl Creative Commons - http://creativecommons.org/licenses/by-nc-sa/3.0/de/
 //- -----------------------------------------------------------------------------------------------------------------------
 #define MAX_FAKEDEVICE_COUNT  16
-
-#define CFG_FDENABLED 3
+#define USE_DISPLAY
 
 #define EI_NOTEXTERNAL
-#include <U8g2lib.h>
 #include <SPI.h>
+#ifdef USE_DISPLAY
+#include <U8g2lib.h>
 #include "TM12864_LCD.h"
+#endif
 #include <AskSinPP.h>
 #include <Register.h>
 #include "HB_MultiChannelDevice.h"
 
+#ifdef USE_DISPLAY
 #define LCD_CS     28
 #define LCD_RST    29
 #define LCD_DC     30
@@ -23,20 +25,18 @@
 #define LCD_GREEN  33
 #define CHANNEL_PER_PAGE 8
 
-#define HAT_LED    22 //PD4
-#define HAT_BTN     7 //PE7 INT7
+#define ROTARY_ENC_D_PIN  4
+#define ROTARY_ENC_C_PIN  5
+#endif
 
 #define CC1101_CS   8 //PB0
 #define CC1101_GDO0 6 //PE6 INT6
 
-#define MSG_INTERVAL        10
-
-#define CONFIG_BUTTON_PIN HAT_BTN
-#define ROTARY_ENC_D_PIN  4
-#define ROTARY_ENC_C_PIN  5
-
+#define CONFIG_BUTTON_PIN  7 //PE7 INT7
+#define LED               22 //PD4
 
 #define PEERS_PER_CHANNEL  4
+#define CFG_BYTE_OFFSET    8
 
 #define TOSTRING(x) #x
 #define TOSTR(x) TOSTRING(x)
@@ -55,12 +55,12 @@ const struct DeviceInfo PROGMEM devinfo = {
 
 typedef LibSPI<CC1101_CS> SPIType;
 typedef Radio<SPIType, CC1101_GDO0> RadioType;
-typedef StatusLed<HAT_LED> LedType;
+typedef StatusLed<LED> LedType;
 typedef AskSin<LedType, NoBattery, RadioType> Hal;
 Hal hal;
 
+#ifdef USE_DISPLAY
 class LCDDisplayType : public Alarm {
-
 private:
   U8G2_ST7565_64128N_F_4W_HW_SPI display;
   TM12864<LCD_RED, LCD_GREEN, LCD_BLUE> tm12864;
@@ -139,6 +139,7 @@ public:
 
   void startup(bool hasMaster) {
     tm12864.initLCD();
+    display.setDisplayRotation(U8G2_R2);
     enableBacklight();
     display.setFontMode(false);
 
@@ -212,9 +213,9 @@ public:
 
         display.setCursor(86,y);
         display.print('|');
-        display.setCursor(88,y);
+        display.setCursor(92,y);
         uint32_t rest = fakeDevice[devIdx + listOffset].CyclicTimeout - fakeDevice[devIdx + listOffset].CurrentTick;
-        for (uint8_t i = 0; i < 8 - numdigits(rest); i++) { display.print(" "); }
+        for (uint8_t i = 0; i < 7 - numdigits(rest); i++) { display.print(" "); }
         display.print(rest);
       } else {
         display.print("------");
@@ -232,6 +233,7 @@ public:
   }
 
 } LCDDisplay;
+#endif
 
 DEFREGISTER(UReg0, MASTERID_REGS, DREG_TRANSMITTRYMAX, DREG_BACKONTIME)
 class DevList0 : public RegList0<UReg0> {
@@ -347,9 +349,9 @@ class FakeChannel : public Channel<Hal, UList1, EmptyList, List4, PEERS_PER_CHAN
         _last_enabled = fakeDevice[devIdx].Enabled;
       }
 
-      if (device().getList0().masterid().valid() == true)
-        LCDDisplay.update();
-
+#ifdef USE_DISPLAY
+      if (device().getList0().masterid().valid() == true) LCDDisplay.update();
+#endif
       sysclock.add(*this);
     }
 
@@ -362,7 +364,7 @@ class FakeChannel : public Channel<Hal, UList1, EmptyList, List4, PEERS_PER_CHAN
 
         //save Enabled in EEPROM
         StorageConfig sc = device().getConfigArea();
-        uint8_t cfgByteOffset = CFG_FDENABLED + (number() - 1) / 8;
+        uint8_t cfgByteOffset = CFG_BYTE_OFFSET + (number() - 1) / 8;
         uint8_t bitPosition = (number() - 1) % 8;
         uint8_t cfgByte = sc.getByte(cfgByteOffset);
         if (en == true) bitSet(cfgByte, bitPosition); else bitClear(cfgByte, bitPosition);
@@ -383,7 +385,7 @@ class FakeChannel : public Channel<Hal, UList1, EmptyList, List4, PEERS_PER_CHAN
     bool getEnabled() {
       if (number() > 0) {
         StorageConfig sc = device().getConfigArea();
-        uint8_t cfgByteOffset = CFG_FDENABLED + (number() - 1) / 8;
+        uint8_t cfgByteOffset = CFG_BYTE_OFFSET + (number() - 1) / 8;
         uint8_t bitPosition = (number() - 1) % 8;
 
         bool en = bitRead(sc.getByte(cfgByteOffset), bitPosition);
@@ -430,15 +432,17 @@ public:
 
   virtual void configChanged () {
     TSDevice::configChanged();
-
+#ifdef USE_DISPLAY
     uint8_t bOn = this->getList0().backOnTime();
     //DPRINT(F("*LCD Backlight Ontime : ")); DDECLN(bOn);
     LCDDisplay.setBackLightOnTime(bOn);
+#endif
   }
 };
 TDummyDevice sdev(devinfo, 0x20);
 
 
+#ifdef USE_DISPLAY
 class ConfBtn : public ConfigButton<TDummyDevice>  {
 public:
   ConfBtn (TDummyDevice& i) : ConfigButton(i) {}
@@ -470,8 +474,11 @@ public:
   }
 };
 ConfBtn cfgBtn(sdev);
+#else
+ConfigButton<TDummyDevice> cfgBtn(sdev);
+#endif
 
-
+#ifdef USE_DISPLAY
 class RotaryEncoder : public BaseEncoder {
 public:
   RotaryEncoder () : BaseEncoder() {};
@@ -484,38 +491,44 @@ public:
     int8_t dx = read();
     if( dx != 0 ) {
       if (dx > 0) {
-        LCDDisplay.moveUp();
-      } else {
         LCDDisplay.moveDown();
+      } else {
+        LCDDisplay.moveUp();
       }
     }
   }
 } enc;
+#endif
 
 void setup () {
   DINIT(57600, ASKSIN_PLUS_PLUS_IDENTIFIER);
   
   sdev.init(hal);
   buttonISR(cfgBtn, CONFIG_BUTTON_PIN);
-  encoderISR(enc, ROTARY_ENC_C_PIN, ROTARY_ENC_D_PIN);
   sdev.initDone();
 
   bool hasMaster = (sdev.getList0().masterid().valid() == true);
 
+#ifdef USE_DISPLAY
   LCDDisplay.startup(hasMaster);
-
+  encoderISR(enc, ROTARY_ENC_C_PIN, ROTARY_ENC_D_PIN);
+  _delay_ms(2000);
+#endif
   if (hasMaster) {
-    _delay_ms(2000);
     for (uint8_t i = 0; i < MAX_FAKEDEVICE_COUNT; i++) {
       sdev.channel(i+1).setStatus(fakeDevice[i].Enabled ? 200 : 0);
       sdev.channel(i+1).changed(true);
     }
-    LCDDisplay.update();
   }
+#ifdef USE_DISPLAY
+  LCDDisplay.update();
+#endif
 }
 
 void loop() {
+#ifdef USE_DISPLAY
   enc.process();
+#endif
   hal.runready();
   sdev.pollRadio();
 }
