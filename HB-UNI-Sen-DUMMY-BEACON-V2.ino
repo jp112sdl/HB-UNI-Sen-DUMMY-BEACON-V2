@@ -24,16 +24,25 @@
 #define LCD_RED    32
 #define LCD_GREEN  33
 #define CHANNEL_PER_PAGE 8
+#define LCD_UPDATE_CYCLE 1000 //milliseconds refresh time
 
 #define ROTARY_ENC_D_PIN  4
 #define ROTARY_ENC_C_PIN  5
-#endif
 
 #define CC1101_CS   8 //PB0
 #define CC1101_GDO0 6 //PE6 INT6
 
 #define CONFIG_BUTTON_PIN  7 //PE7 INT7
 #define LED               22 //PD4
+#else
+//if we use the normal Pro Mini setup
+#define CC1101_CS   10
+#define CC1101_GDO0 2
+
+#define CONFIG_BUTTON_PIN  8
+#define LED                4
+#endif
+
 
 #define PEERS_PER_CHANNEL  4
 #define CFG_BYTE_OFFSET    8
@@ -61,7 +70,20 @@ Hal hal;
 
 #ifdef USE_DISPLAY
 class LCDDisplayType : public Alarm {
+
+  class BacklightAlarm : public Alarm {
+    LCDDisplayType& lcd;
+    public:
+      BacklightAlarm (LCDDisplayType& l) : Alarm (0), lcd(l) {}
+      virtual ~BacklightAlarm () {}
+
+      void trigger (__attribute__ ((unused)) AlarmClock& clock)  {
+        lcd.disableBacklight();
+      }
+    } lcdBacklightTimer;
+
 private:
+  enum LED_COLORS {WHITE=0, RED, GREEN, BLUE };
   U8G2_ST7565_64128N_F_4W_HW_SPI display;
   TM12864<LCD_RED, LCD_GREEN, LCD_BLUE> tm12864;
   uint8_t cursorPos;
@@ -73,32 +95,33 @@ private:
   }
 
 public:
-  LCDDisplayType () : Alarm(0), display(U8G2_R0, LCD_CS, LCD_DC, LCD_RST), tm12864(display), cursorPos(0), backlightOnTime(4), listOffset(0) {}
+  LCDDisplayType () :  Alarm(0), lcdBacklightTimer(*this), display(U8G2_R0, LCD_CS, LCD_DC, LCD_RST), tm12864(display), cursorPos(0), backlightOnTime(4), listOffset(0) {}
   virtual ~LCDDisplayType () {}
 
   void setBackLightOnTime(uint8_t t) {
-    if (backlightOnTime == 0) {
+    if (backlightOnTime == 0)
       disableBacklight();
-    }
 
     backlightOnTime = t;
 
-    if (backlightOnTime == 255) {
+    if (backlightOnTime == 255)
       enableBacklight();
-    }
   }
 
   void disableBacklight() {
     tm12864.setALL(LED_OFF);
   }
 
-  void enableBacklight() {
+  void enableBacklight(uint8_t color=WHITE) {
     if (backlightOnTime > 0) {
-      tm12864.setALL(LED_ON);
+      if (color == WHITE)    tm12864.setALL(LED_ON);
+      if (color == RED  )  { tm12864.setALL(LED_OFF); tm12864.setRED  (true); }
+      if (color == GREEN)  { tm12864.setALL(LED_OFF); tm12864.setGREEN(true); }
+      if (color == BLUE )  { tm12864.setALL(LED_OFF); tm12864.setBLUE (true); }
       if (backlightOnTime < 255) {
-        sysclock.cancel(*this);
-        set(seconds2ticks(backlightOnTime));
-        sysclock.add(*this);
+        sysclock.cancel(lcdBacklightTimer);
+        lcdBacklightTimer.set(seconds2ticks(backlightOnTime));
+        sysclock.add(lcdBacklightTimer);
       }
     } else {
       disableBacklight();
@@ -106,7 +129,9 @@ public:
   }
 
   virtual void trigger (__attribute__ ((unused)) AlarmClock& clock) {
-    disableBacklight();
+    update();
+    set(millis2ticks(LCD_UPDATE_CYCLE));
+    clock.add(*this);
   }
 
   void moveUp() {
@@ -137,10 +162,10 @@ public:
     return listOffset+cursorPos;
   }
 
-  void startup(bool hasMaster) {
+  void startup(bool hasMaster, bool scValid) {
     tm12864.initLCD();
     display.setDisplayRotation(U8G2_R2);
-    enableBacklight();
+    enableBacklight(scValid ? GREEN:RED);
     display.setFontMode(false);
 
     const char * title        PROGMEM = "DUMMY-BEACON V2";
@@ -174,12 +199,22 @@ public:
     display.sendBuffer();
   }
 
+  void startCyclicUpdate() {
+    sysclock.cancel(*this);
+    set(millis2ticks(LCD_UPDATE_CYCLE));
+    sysclock.add(*this);
+  }
+
+  void stopCyclicUpdate() {
+    sysclock.cancel(*this);
+  }
+
   void update() {
     display.clearBuffer();
 
     display.setFont(u8g2_font_5x8_tr);
-    display.setCursor(11,6);
-    display.print(" E  ADDR | VAL |  NEXT");
+    display.setCursor(16,6);
+    display.print("E  ADDR | VAL |  NEXT");
     display.setCursor(82,6);
     display.print('b');
     display.drawLine(0, 7, display.getWidth(), 7);
@@ -203,9 +238,11 @@ public:
 
         display.setCursor(56,y);
         display.print('|');
-        display.setCursor(65,y);
+
+        uint8_t val_x = 65;
         uint8_t statusvalue = fakeDevice[devIdx + listOffset].StatusValue;
-        for (uint8_t i = 0; i < 3 - numdigits(statusvalue); i++) { display.print(" "); }
+        for (uint8_t i = 0; i < 3 - numdigits(statusvalue); i++) { val_x+=5; }
+        display.setCursor(val_x,y);
         display.print(statusvalue);
 
         if (fakeDevice[devIdx + listOffset].Broadcast)
@@ -213,10 +250,21 @@ public:
 
         display.setCursor(86,y);
         display.print('|');
-        display.setCursor(92,y);
-        uint32_t rest = fakeDevice[devIdx + listOffset].CyclicTimeout - fakeDevice[devIdx + listOffset].CurrentTick;
-        for (uint8_t i = 0; i < 7 - numdigits(rest); i++) { display.print(" "); }
-        display.print(rest);
+
+
+        uint32_t cyclicTimeout = fakeDevice[devIdx + listOffset].CyclicTimeout;
+        uint32_t currentTick = fakeDevice[devIdx + listOffset].CurrentTick;
+        if (cyclicTimeout > 0) {
+          uint32_t rest = (currentTick <= cyclicTimeout) ? cyclicTimeout - currentTick : 0;
+          uint8_t next_x = 92;
+          for (uint8_t i = 0; i < 7 - numdigits(rest); i++) { next_x+=5; }
+          display.setCursor(next_x,y);
+          display.print(rest);
+        } else {
+          display.setCursor(112,y);
+          display.print("ACK");
+        }
+
       } else {
         display.print("------");
       }
@@ -231,7 +279,7 @@ public:
     display.print(">");
     display.sendBuffer();
   }
-
+  
 } LCDDisplay;
 #endif
 
@@ -287,7 +335,6 @@ class UList1 : public RegList1<UReg1> {
       ADDRESS_SENDER_MID_BYTE(0);
       ADDRESS_SENDER_LOW_BYTE(0);
       CyclicTimeout(0);
-      //FakeDeviceEnabled(false);
       StatusValue(0);
       Broadcast(true);
     }
@@ -317,7 +364,9 @@ class FakeChannel : public Channel<Hal, UList1, EmptyList, List4, PEERS_PER_CHAN
     }
     
     virtual void trigger (__attribute__ ((unused)) AlarmClock& clock) {
-      Alarm::set(seconds2ticks(1));
+      const uint8_t checkInterval = 5;
+
+      Alarm::set(seconds2ticks(checkInterval));
 
       uint8_t devIdx = number() - 1;
 
@@ -326,7 +375,7 @@ class FakeChannel : public Channel<Hal, UList1, EmptyList, List4, PEERS_PER_CHAN
       if (fakeDevice[devIdx].Enabled == true) {
         if (fakeDevId.valid()) {
           if (fakeDevice[devIdx].CyclicTimeout > 0) {
-            fakeDevice[devIdx].CurrentTick++;
+            fakeDevice[devIdx].CurrentTick += checkInterval;
             if (fakeDevice[devIdx].CurrentTick >= fakeDevice[devIdx].CyclicTimeout) {
               DPRINT(F("SEND MSG FOR DEV ")); fakeDevId.dump(); DPRINTLN("");
               setStatus(this->getList1().StatusValue());
@@ -338,7 +387,7 @@ class FakeChannel : public Channel<Hal, UList1, EmptyList, List4, PEERS_PER_CHAN
           }
         } else {
           DPRINTLN(F("Device ID is invalid; disabling"));
-          _delay_ms(1000);
+          _delay_ms(400);
           setEnabled(false);
         }
       }
@@ -349,26 +398,25 @@ class FakeChannel : public Channel<Hal, UList1, EmptyList, List4, PEERS_PER_CHAN
         _last_enabled = fakeDevice[devIdx].Enabled;
       }
 
-#ifdef USE_DISPLAY
-      if (device().getList0().masterid().valid() == true) LCDDisplay.update();
-#endif
       sysclock.add(*this);
     }
 
     void setEnabled(bool en, bool saveOnly = false) {
+      uint8_t chNumber = number();
       if (number() > 0) {
-        HMID fdevID = fakeDevice[number() - 1].FakeDeviceID;
+        HMID fdevID = fakeDevice[chNumber - 1].FakeDeviceID;
         if (fdevID.valid() == false) en = false;
         //set Enabled in fakeDevice
-        fakeDevice[number() - 1].Enabled = en;
+        fakeDevice[chNumber - 1].Enabled = en;
 
         //save Enabled in EEPROM
         StorageConfig sc = device().getConfigArea();
-        uint8_t cfgByteOffset = CFG_BYTE_OFFSET + (number() - 1) / 8;
-        uint8_t bitPosition = (number() - 1) % 8;
+        uint8_t cfgByteOffset = CFG_BYTE_OFFSET + (chNumber - 1) / 8;
+        uint8_t bitPosition = (chNumber - 1) % 8;
         uint8_t cfgByte = sc.getByte(cfgByteOffset);
         if (en == true) bitSet(cfgByte, bitPosition); else bitClear(cfgByte, bitPosition);
         sc.setByte(cfgByteOffset, cfgByte);
+        sc.validate();
 
         if (saveOnly == false) {
           //send state to ccu
@@ -376,39 +424,51 @@ class FakeChannel : public Channel<Hal, UList1, EmptyList, List4, PEERS_PER_CHAN
           changed(true);
 
           //send first fake state 5 seconds after enabling
-          if (en) fakeDevice[number() - 1].CurrentTick = fakeDevice[number() - 1].CyclicTimeout - 5;
+          uint32_t cyclic_timeout = fakeDevice[chNumber - 1].CyclicTimeout;
+          if (en && cyclic_timeout > 10) fakeDevice[chNumber - 1].CurrentTick = cyclic_timeout - 10;
         }
-        DPRINT("set FakeDeviceEnabled #");DDEC(number()-1);DPRINT(" is  ");DDEC(en);DPRINT(", with CFG BYTE OFFSET ");DDEC(cfgByteOffset);DPRINT(" on bit ");DDECLN(bitPosition);
+
+        _last_enabled = en;
+        DPRINT("set FakeDeviceEnabled #");DDEC(chNumber-1);DPRINT(" is  ");DDEC(en);DPRINT(", with CFG BYTE OFFSET ");DDEC(cfgByteOffset);DPRINT(" on bit ");DDECLN(bitPosition);
       }
     }
 
     bool getEnabled() {
-      if (number() > 0) {
+      uint8_t chNumber = number();
+      if (chNumber > 0) {
         StorageConfig sc = device().getConfigArea();
-        uint8_t cfgByteOffset = CFG_BYTE_OFFSET + (number() - 1) / 8;
-        uint8_t bitPosition = (number() - 1) % 8;
+        uint8_t cfgByteOffset = CFG_BYTE_OFFSET + (chNumber - 1) / 8;
+        uint8_t bitPosition = (chNumber - 1) % 8;
 
         bool en = bitRead(sc.getByte(cfgByteOffset), bitPosition);
-        DPRINT("get FakeDeviceEnabled #");DDEC(number()-1);DPRINT(" is  ");DDEC(en);DPRINT(", with CFG BYTE OFFSET ");DDEC(cfgByteOffset);DPRINT(" on bit ");DDECLN(bitPosition);
+        DPRINT("get FakeDeviceEnabled #");DDEC(chNumber-1);DPRINT(" is  ");DDEC(en);DPRINT(", with CFG BYTE OFFSET ");DDEC(cfgByteOffset);DPRINT(" on bit ");DDECLN(bitPosition);
         return en;
       }
       return false;
     }
 
     void configChanged() {
-      HMID fdev = {this->getList1().ADDRESS_SENDER_HIGH_BYTE(), this->getList1().ADDRESS_SENDER_MID_BYTE(), this->getList1().ADDRESS_SENDER_LOW_BYTE()}; 
-      uint32_t timeout = this->getList1().CyclicTimeout();
-      bool en = getEnabled();
-      uint8_t sval = this->getList1().StatusValue();
-      bool bcast = this->getList1().Broadcast();
+#ifdef USE_DISPLAY
+      LCDDisplay.stopCyclicUpdate();
+#endif
+      HMID     fdev    = {this->getList1().ADDRESS_SENDER_HIGH_BYTE(), this->getList1().ADDRESS_SENDER_MID_BYTE(), this->getList1().ADDRESS_SENDER_LOW_BYTE()};
+      uint8_t  sval    =  this->getList1().StatusValue();
+      uint32_t timeout =  this->getList1().CyclicTimeout();
+      bool     bcast   =  this->getList1().Broadcast();
+      bool     en      =  getEnabled();
+
       //DPRINT(F("ch ")); DDEC(number()); DPRINT(F(", FakeDeviceID ")); fdev.dump(); DPRINT(F(", CyclicTimeout ")); DDEC(timeout); DPRINT(F(", Enabled ")); DDEC(en);DPRINT(F(", Broadcast ")); DDEC(bcast); DPRINT(F(", StatusValue ")); DDECLN(sval);
       
       fakeDevice[number() - 1].FakeDeviceID  = fdev;
       fakeDevice[number() - 1].CyclicTimeout = timeout;
-      fakeDevice[number() - 1].CurrentTick   = 0;//(timeout > 10) ? timeout - 10 : 0;
+      fakeDevice[number() - 1].CurrentTick   = 0;
+      fakeDevice[number() - 1].Broadcast     = timeout > 0 ? bcast : false;
+      fakeDevice[number() - 1].StatusValue   = timeout > 0 ? sval  :   0  ;
       setEnabled(en, true);
-      fakeDevice[number() - 1].Broadcast     = bcast;
-      fakeDevice[number() - 1].StatusValue   = sval;
+
+#ifdef USE_DISPLAY
+      LCDDisplay.startCyclicUpdate();
+#endif
     }
 
     void setup(Device<Hal, DevList0>* dev, uint8_t number, uint16_t addr) {
@@ -502,17 +562,17 @@ public:
 
 void setup () {
   DINIT(57600, ASKSIN_PLUS_PLUS_IDENTIFIER);
-  
+
   sdev.init(hal);
   buttonISR(cfgBtn, CONFIG_BUTTON_PIN);
   sdev.initDone();
 
   bool hasMaster = (sdev.getList0().masterid().valid() == true);
+  bool scValid   = (sdev.getConfigArea()      .valid() == true);
 
 #ifdef USE_DISPLAY
-  LCDDisplay.startup(hasMaster);
+  LCDDisplay.startup(hasMaster, scValid);
   encoderISR(enc, ROTARY_ENC_C_PIN, ROTARY_ENC_D_PIN);
-  _delay_ms(2000);
 #endif
   if (hasMaster) {
     for (uint8_t i = 0; i < MAX_FAKEDEVICE_COUNT; i++) {
@@ -521,7 +581,7 @@ void setup () {
     }
   }
 #ifdef USE_DISPLAY
-  LCDDisplay.update();
+  LCDDisplay.startCyclicUpdate();
 #endif
 }
 
