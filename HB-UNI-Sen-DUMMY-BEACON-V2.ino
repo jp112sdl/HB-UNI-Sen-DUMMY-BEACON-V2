@@ -6,7 +6,6 @@
 #define MAX_FAKEDEVICE_COUNT  16
 #define USE_DISPLAY
 
-#define EI_NOTEXTERNAL
 #include <SPI.h>
 #ifdef USE_DISPLAY
 #include <U8g2lib.h>
