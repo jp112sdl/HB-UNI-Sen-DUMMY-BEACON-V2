@@ -202,15 +202,10 @@ class Device {
     }
 
     bool sendFake(Message& msg, const HMID& from) {
-      msg.to(getMasterID());
-      if ( msg.to().valid() == true ) {
-        msg.from(from);
-        msg.setRpten(); // has to be set always
-        return send(msg);
-      } else {
-        DPRINTLN("NO VALID RECEIVER (Central) DEFINED");
-        return true;
-      }
+      msg.to((msg.flags() & Message::BCAST) ? HMID::broadcast : getMasterID());
+      msg.from(from);
+      msg.setRpten(); // has to be set always
+      return send(msg);
     }
 
     bool send(Message& msg, const HMID& to) {
