@@ -282,14 +282,19 @@ public:
 } LCDDisplay;
 #endif
 
-DEFREGISTER(UReg0, MASTERID_REGS, DREG_TRANSMITTRYMAX, DREG_BACKONTIME)
+DEFREGISTER(UReg0, MASTERID_REGS, DREG_TRANSMITTRYMAX, DREG_BACKONTIME, 0x34)
 class DevList0 : public RegList0<UReg0> {
   public:
     DevList0 (uint16_t addr) : RegList0<UReg0>(addr) {}
+
+    bool txPower(uint8_t v) const { return this->writeRegister(0x34,v); }
+    uint8_t txPower() const { return this->readRegister(0x34,0); }
+
     void defaults () {
       clear();
       transmitDevTryMax(2);
       backOnTime(4);
+      txPower(2);
     }
 };
 
@@ -491,6 +496,12 @@ public:
 
   virtual void configChanged () {
     TSDevice::configChanged();
+
+    const byte powerMode[3] = { PA_LowPower, PA_Normal, PA_MaxPower };
+    uint8_t txPower = min(this->getList0().txPower(), 2);
+    radio().initReg(CC1101_PATABLE, powerMode[txPower]);
+    DPRINT(F("txPower: "));DDECLN(txPower);
+
 #ifdef USE_DISPLAY
     uint8_t bOn = this->getList0().backOnTime();
     //DPRINT(F("*LCD Backlight Ontime : ")); DDECLN(bOn);
