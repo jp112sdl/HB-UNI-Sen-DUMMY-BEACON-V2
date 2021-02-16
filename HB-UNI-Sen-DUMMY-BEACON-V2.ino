@@ -15,6 +15,11 @@
 #include <Register.h>
 #include "HB_MultiChannelDevice.h"
 
+// make compatible with v5.0.0
+#ifndef ASKSIN_PLUS_PLUS_VERSION_STR
+  #define ASKSIN_PLUS_PLUS_VERSION_STR ASKSIN_PLUS_PLUS_VERSION
+#endif
+
 #ifdef USE_DISPLAY
 #define LCD_CS     28
 #define LCD_RST    29
@@ -168,7 +173,7 @@ public:
     display.setFontMode(false);
 
     const char * title        PROGMEM = "DUMMY-BEACON V2";
-    const char * asksinpp     PROGMEM = "AskSin++ V" ASKSIN_PLUS_PLUS_VERSION;
+    const char * asksinpp     PROGMEM = "AskSin++ V" ASKSIN_PLUS_PLUS_VERSION_STR;
     const char * compiledMsg  PROGMEM = "compiled on";
     const char * compiledDate PROGMEM = __DATE__ " " __TIME__;
     const char * noMaster     PROGMEM = "-keine Zentrale-";
