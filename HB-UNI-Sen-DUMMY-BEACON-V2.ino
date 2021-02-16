@@ -3,6 +3,8 @@
 // 2016-10-31 papa Creative Commons - http://creativecommons.org/licenses/by-nc-sa/3.0/de/
 // 2018-08-30 jp112sdl Creative Commons - http://creativecommons.org/licenses/by-nc-sa/3.0/de/
 //- -----------------------------------------------------------------------------------------------------------------------
+// ci-test=yes board=mega128 aes=no
+
 #define MAX_FAKEDEVICE_COUNT  16
 #define USE_DISPLAY
 
