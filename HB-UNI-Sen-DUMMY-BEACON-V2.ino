@@ -333,6 +333,13 @@ class UList1 : public RegList1<UReg1> {
       return this->writeBit(0x07, 1, v);
     }
 
+    bool AutoDisable () const {
+      return this->readBit(0x07, 2, true);
+    }
+    bool AutoDisable (bool v) const {
+      return this->writeBit(0x07, 2, v);
+    }
+
     bool StatusValue (uint8_t value) const {
       return this->writeRegister(0x08, value & 0xff);
     }
@@ -347,6 +354,7 @@ class UList1 : public RegList1<UReg1> {
       ADDRESS_SENDER_LOW_BYTE(0);
       CyclicTimeout(0);
       StatusValue(0);
+      AutoDisable(1);
       Broadcast(true);
     }
 };
@@ -466,6 +474,7 @@ class FakeChannel : public Channel<Hal, UList1, EmptyList, List4, PEERS_PER_CHAN
       uint8_t  sval    =  this->getList1().StatusValue();
       uint32_t timeout =  this->getList1().CyclicTimeout();
       bool     bcast   =  this->getList1().Broadcast();
+      bool autodisable =  this->getList1().AutoDisable();
       bool     en      =  getEnabled();
 
       //DPRINT(F("ch ")); DDEC(number()); DPRINT(F(", FakeDeviceID ")); fdev.dump(); DPRINT(F(", CyclicTimeout ")); DDEC(timeout); DPRINT(F(", Enabled ")); DDEC(en);DPRINT(F(", Broadcast ")); DDEC(bcast); DPRINT(F(", StatusValue ")); DDECLN(sval);
@@ -475,6 +484,7 @@ class FakeChannel : public Channel<Hal, UList1, EmptyList, List4, PEERS_PER_CHAN
       fakeDevice[number() - 1].CurrentTick   = 0;
       fakeDevice[number() - 1].Broadcast     = timeout > 0 ? bcast : false;
       fakeDevice[number() - 1].StatusValue   = timeout > 0 ? sval  :   0  ;
+      fakeDevice[number() - 1].AutoDisable   = autodisable;
       setEnabled(en, true);
 
 #ifdef USE_DISPLAY

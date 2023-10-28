@@ -36,6 +36,7 @@ struct FakeDeviceInfo {
   uint32_t CurrentTick;
   uint8_t  StatusValue;
   bool     Broadcast;
+  bool     AutoDisable;
 } fakeDevice[MAX_FAKEDEVICE_COUNT];
 
 template <class HalType, class ChannelType, int ChannelCount, class List0Type = List0>
@@ -463,8 +464,11 @@ class ChannelDevice : public Device<HalType, List0Type> {
           if (fakeDevId.valid()) {
             if (fakeDevice[devIdx].Enabled == true) {
               if (fakeDevId == msg.from()) {
-                fakeDevice[devIdx].Enabled = false;
                 DPRINT(F("DISABLED DEVICE ")); fakeDevId.dump(); DPRINTLN(F(" - seems to be alive!"));
+                if (fakeDevice[devIdx].AutoDisable == true) {
+                  DPRINTLN("AutoDisable is true, so we will disable the fake device.");
+                  fakeDevice[devIdx].Enabled = false;
+                }
               } else {
                 if (msg.to() == fakeDevId ) {
                   //this->sendFake(msg,  msg.from());
